@@ -4,77 +4,54 @@ from matplotlib import pyplot as plt
 
 DEBUG = False
 DIST_THRESHOLD = 10
-TEMPLATE_SCALE = 1.5
+TEMPLATE_SCALE = 7.5
 AREA_THRESHOLD = 0.2
-table_template_points = (TEMPLATE_SCALE*np.array([[0,0],[515,0],[515,295],[0,295]])).reshape(-1,1,2)
+PYRAMID_SCALE = 0.6
+BALL_SIZE = int(2.25 * 2 * TEMPLATE_SCALE)
+table_template_points = (TEMPLATE_SCALE*np.array([[0,0],[88,0],[88,44],[0,44]])).reshape(-1,1,2)
+cueBallTemplate = cv.resize(cv.imread('testFrames/templateBallBlank.png'), (BALL_SIZE, BALL_SIZE), interpolation = cv.INTER_AREA)
 
-def createLineIterator(P1, P2, img):
-    imageH = img.shape[0]
-    imageW = img.shape[1]
-    P1X = P1[0]
-    P1Y = P1[1]
-    P2X = P2[0]
-    P2Y = P2[1]
+# Marked for removal
+def createPyramid(img, min_size = 10):
+    out = []
+    currentScale = 1.0
+    while True:
+        currentScale *= PYRAMID_SCALE
+        if img.shape[0] * currentScale <= min_size or img.shape[1] * currentScale <= min_size:
+            break
+            
+        width = int(img.shape[1] * currentScale)
+        height = int(img.shape[0] * currentScale)
+        dim = (width, height)
+        rescaled_img = cv.resize(img,dim,interpolation = cv.INTER_AREA)
+        out.append(rescaled_img)
+        
+    return out
 
-    #difference and absolute difference between points
-    #used to calculate slope and relative location between points
-    dX = P2X - P1X
-    dY = P2Y - P1Y
-    dXa = np.abs(dX)
-    dYa = np.abs(dY)
+# Marked for removal
+def returnPyramidMatch(img, template):
+    pyramid = createPyramid(template)
+    res = np.zeros((img.shape[0],img.shape[1]),dtype=np.float32)
+    for t in pyramid:
+        match = cv.matchTemplate(img,t,3)
+        res[:match.shape[0], :match.shape[1]] += match
+        
+    min_val, max_val, min_loc, max_loc = cv.minMaxLoc(res)
+    return max_loc
 
-    #predefine numpy array for output based on distance between points
-    itbuffer = np.empty(shape=(np.maximum(dYa,dXa),3),dtype=np.float32)
-    itbuffer.fill(np.nan)
-
-    #Obtain coordinates along the line using a form of Bresenham's algorithm
-    negY = P1Y > P2Y
-    negX = P1X > P2X
-    if P1X == P2X: #vertical line segment
-        itbuffer[:,0] = P1X
-        if negY:
-            itbuffer[:,1] = np.arange(P1Y - 1,P1Y - dYa - 1,-1)
-        else:
-            itbuffer[:,1] = np.arange(P1Y+1,P1Y+dYa+1)              
-    elif P1Y == P2Y: #horizontal line segment
-        itbuffer[:,1] = P1Y
-        if negX:
-            itbuffer[:,0] = np.arange(P1X-1,P1X-dXa-1,-1)
-        else:
-            itbuffer[:,0] = np.arange(P1X+1,P1X+dXa+1)
-    else: #diagonal line segment
-        steepSlope = dYa > dXa
-        if steepSlope:
-            slope = dX/dY
-            if negY:
-                itbuffer[:,1] = np.arange(P1Y-1,P1Y-dYa-1,-1)
-            else:
-                itbuffer[:,1] = np.arange(P1Y+1,P1Y+dYa+1)
-                itbuffer[:,0] = (slope*(itbuffer[:,1]-P1Y)).astype(np.int) + P1X
-        else:
-            slope = dY/dX
-            if negX:
-                itbuffer[:,0] = np.arange(P1X-1,P1X-dXa-1,-1)
-            else:
-                itbuffer[:,0] = np.arange(P1X+1,P1X+dXa+1)
-            itbuffer[:,1] = (slope*(itbuffer[:,0]-P1X)).astype(np.int) + P1Y
-
-    #Remove points outside of image
-    colX = itbuffer[:,0]
-    colY = itbuffer[:,1]
-    itbuffer = itbuffer[(colX >= 0) & (colY >=0) & (colX<imageW) & (colY<imageH)]
-
-    #Get intensities from img ndarray
-    itbuffer[:,2] = img[itbuffer[:,1].astype(np.uint),itbuffer[:,0].astype(np.uint)]
-
-    return itbuffer
+def locateBall(img, template):
+    res = cv.matchTemplate(img,template,5)
+    # Convolve with box filter to encourage finding the point with 
+    # sustained average high matching probability, instead of just a single high value.
+    # Box filter chosen over gaussian / median to emphasize averaging
+    smoothingKernel = np.ones((5,5), np.float32)/25
+    res = cv.filter2D(res, -1, smoothingKernel)
+    min_val, max_val, min_loc, max_loc = cv.minMaxLoc(res)
+    return res, max_loc, max_val
 
 
 def dist(x1,y1,x2,y2):
     return ((x2-x1)**2 + (y2-y1)**2)**0.5
-
-def isBetween(ix,iy,x1,y1,x2,y2):
-    return ((x1 <= ix <= x2) or (x1 >= ix >= x2)) and ((y1 <= iy <= y2) or (y1 >= iy >= y2))
     
 def isClose(slope1, slope2):
     if abs(slope1) > 10: # for steep slopes 
@@ -89,6 +66,7 @@ def isClose(slope1, slope2):
     return False
 
 def isInLine(L1,L2):
+    # Determines if two line segments are aligned and should be combined
     x1,y1,x2,y2 = L1
     x3,y3,x4,y4 = L2
     
@@ -112,6 +90,8 @@ def isInLine(L1,L2):
     
     return dist(ix1,iy1, mx1,my1) < DIST_THRESHOLD or dist(ix2,iy2, mx2,my2) < DIST_THRESHOLD
 
+# Helper function for filtering lines.
+# Returns true if l is not aligned with anything in ll.
 def allFalse(l, ll):
     for u in ll:
         if isInLine(l, u):
@@ -119,17 +99,19 @@ def allFalse(l, ll):
     return True
 
 def combineLines(L1, L2):
+    # Take two lines, ***assumed to be aligned***, and combines them
     x1,y1,x2,y2 = L1
     x3,y3,x4,y4 = L2
     slope = (y2-y1)/(x2-x1+1e-8)
     pointsArray = np.array([[x1,y1],[x2,y2],[x3,y3],[x4,y4]])
     
-    # steep line, minimize/maximize y
+    # steep line, minimize/maximize y ( make the combined line as long as possible )
     if abs(slope) > 1:
         minStart = pointsArray[np.argmin(pointsArray[:,1])]
         maxEnd = pointsArray[np.argmax(pointsArray[:,1])]
         return np.hstack((minStart,maxEnd))
     
+    # shallow line, minimize/maximize x
     minStart = pointsArray[np.argmin(pointsArray[:,0])]
     maxEnd = pointsArray[np.argmax(pointsArray[:,0])]
     return np.hstack((minStart,maxEnd))
@@ -183,11 +165,13 @@ def getCorners(lines):
         sc = np.roll(sc, -1, axis=0)
     return sc
 
+# Marked for removal
 def drawCorners(img, corners, color = (0,255,0), radius = 5):
     for corner in corners:
         cv.circle(img, (corner[0],corner[1]), radius, color, 5)
         
 def getTableMask(img):
+    # Masks out the green stuff in the scene. Maybe upgrade to use feature matching?
     hsv = cv.cvtColor(img, cv.COLOR_BGR2HSV)
     low_green = np.array([25, 52, 72])
     high_green = np.array([102, 255, 255])
@@ -197,6 +181,7 @@ def getTableMask(img):
     return mask
     
 def findCornersAndTransform(img, template):
+    # Finds the table, calculates the corner points, then finds the camera perspective
     outputRect = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
     totalArea = img.shape[0]*img.shape[1]
     
@@ -210,7 +195,7 @@ def findCornersAndTransform(img, template):
         if area > totalArea*AREA_THRESHOLD:
             cv.drawContours(outputRect, [approx], 0, 255, 2)
             #cv.fillPoly(outputRect, [approx], 255)
-
+            
     lines = cv.HoughLinesP(outputRect,1,np.pi/180,100,minLineLength=100,maxLineGap=10)
     filteredLines = filterLines(lines)
     
@@ -230,24 +215,27 @@ def findCornersAndTransform(img, template):
     
     return corners, M
     
-#############################################################
+################### TESTING CODE ###############################
 
-for i in range(8,14):
+for i in range(4,14):
     img = cv.imread('testFrames/table'+str(i)+'.jpg')
-    worldSpace = np.zeros((int(295*TEMPLATE_SCALE),int(515*TEMPLATE_SCALE),3), dtype=np.uint8)
     output = findCornersAndTransform(img, table_template_points)
 
     if len(output) == 2:
         corners, M = output
-        t_corners = cv.perspectiveTransform(corners, M)
-
-        worldSpace = cv.polylines(worldSpace,[np.int32(t_corners)],True,(0,255,0),10, cv.LINE_AA)
+        worldSpace = cv.warpPerspective(img,M, (int(88*TEMPLATE_SCALE),int(44*TEMPLATE_SCALE)))
         img = cv.polylines(img,[np.int32(corners)],True,(0,255,255),10, cv.LINE_AA)
+        
+        ballLoc, (ballX, ballY), ballVal = locateBall(worldSpace, cueBallTemplate)
+        if ballVal > 0.5:
+            cv.circle(worldSpace, (ballX + BALL_SIZE // 2, ballY + BALL_SIZE // 2), BALL_SIZE, (0,0,255), 5)
 
-        plt.subplot(121),plt.imshow(cv.cvtColor(img,cv.COLOR_BGR2RGB))
+        plt.subplot(131),plt.imshow(cv.cvtColor(img,cv.COLOR_BGR2RGB))
         plt.title('Original Image'), plt.xticks([]), plt.yticks([])
-        plt.subplot(122),plt.imshow(worldSpace)
+        plt.subplot(132),plt.imshow(cv.cvtColor(worldSpace,cv.COLOR_BGR2RGB))
         plt.title('Transformed Image'), plt.xticks([]), plt.yticks([])
+        plt.subplot(133),plt.imshow(ballLoc, cmap = "gray")
+        plt.title('Ball Location Image'), plt.xticks([]), plt.yticks([])
         plt.show()
     else:
         plt.imshow(cv.cvtColor(output,cv.COLOR_BGR2RGB))
