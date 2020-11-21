@@ -11,6 +11,7 @@ BALL_SIZE = int(2.25 * 2 * TEMPLATE_SCALE)
 table_template_points = (TEMPLATE_SCALE*np.array([[0,0],[88,0],[88,44],[0,44]])).reshape(-1,1,2)
 cueBallTemplate = cv.resize(cv.imread('testFrames/templateBallBlank.png'), (BALL_SIZE, BALL_SIZE), interpolation = cv.INTER_AREA)
 
+
 # Marked for removal
 def createPyramid(img, min_size = 10):
     out = []
@@ -214,7 +215,61 @@ def findCornersAndTransform(img, template):
     M, _ = cv.findHomography(corners, template, 0)
     
     return corners, M
+
+def getLength(L):
+    a,b,c,d = L
+    return dist(a,b,c,d)
+
+def findCue(img, bx, by):
+    edge = cv.Canny(img, 100, 200)
+    lines = cv.HoughLinesP(edge,1,np.pi/180,100,minLineLength=100,maxLineGap=10)
+    validLines = []
+    for line in lines:
+        x1,y1,x2,y2 = line[0]
+        slope = (y2-y1+1e-8) / (x2-x1+1e-8)
+        referenceLine = bx,by,bx+1,by-1/slope
+        ix, iy = line_intersection(referenceLine, line[0])
+        
+        if dist(ix,iy,bx,by) < DIST_THRESHOLD:
+            # Make sure the second point is the one closer to the ball
+            if dist(x2,y2,bx,by) < dist(x1,y1,bx,by):
+                validLines.append((x1,y1,x2,y2))
+            else:
+                validLines.append((x2,y2,x1,y1))
+            
+    if len(validLines) == 0:
+        return None
+    validLines.sort(key = getLength, reverse = True)
     
+    return validLines[0]
+    
+def calculateBounce(bx,by,dx,dy):
+    slope = dy/dx
+    sidesToBounce = []
+    if dy < 0:
+        sidesToBounce.append(0)
+    else:
+        sidesToBounce.append(44 * TEMPLATE_SCALE)
+        
+    if dx < 0:
+        sidesToBounce.append(0)
+    else:
+        sidesToBounce.append(88 * TEMPLATE_SCALE)
+        
+    # calculate the intersection with the top/bottom edge
+    yDist = sidesToBounce[0] - by
+    xDist = yDist * dx / dy
+    ix1, iy1 = bx + xDist, sidesToBounce[0]
+    dist1 = (yDist**2 + xDist**2)**0.5
+    
+    # calculate the intersection with the left/right edge
+    xDist = sidesToBounce[1] - bx
+    yDist = xDist * dy / dx
+    ix2, iy2 = sidesToBounce[1], by + yDist
+    dist2 = (yDist**2 + xDist**2)**0.5
+    
+    return (int(ix1),int(iy1), dx, -dy) if dist1 < dist2 else (int(ix2), int(iy2), -dx, dy)
+
 ################### TESTING CODE ###############################
 
 for i in range(4,14):
@@ -227,15 +282,31 @@ for i in range(4,14):
         img = cv.polylines(img,[np.int32(corners)],True,(0,255,255),10, cv.LINE_AA)
         
         ballLoc, (ballX, ballY), ballVal = locateBall(worldSpace, cueBallTemplate)
+        ballX, ballY = ballX + BALL_SIZE // 2, ballY + BALL_SIZE // 2
         if ballVal > 0.5:
-            cv.circle(worldSpace, (ballX + BALL_SIZE // 2, ballY + BALL_SIZE // 2), BALL_SIZE, (0,0,255), 5)
+            cueImage = worldSpace.copy()
+            cueLine = findCue(cueImage, ballX, ballY)
+            cv.circle(worldSpace, (ballX, ballY), BALL_SIZE, (0,0,255), 5)
+            
+            if cueLine is not None:
+                x1,y1,x2,y2 = cueLine
+                cv.line(cueImage, (x1,y1), (x2,y2), (0,0,255), 10)
+                dx, dy = x2-x1,y2-y1
+                
+                for bounce in range(3):
+                    ix, iy, dx, dy = calculateBounce(ballX, ballY, dx, dy)
+                    cv.line(cueImage, (ballX,ballY), (ix,iy), (0,255,0), 2)
+                    ballX, ballY = ix, iy
+            
+            plt.subplot(224),plt.imshow(cv.cvtColor(cueImage,cv.COLOR_BGR2RGB))
+            plt.title('Trajectory'), plt.xticks([]), plt.yticks([])
 
-        plt.subplot(131),plt.imshow(cv.cvtColor(img,cv.COLOR_BGR2RGB))
+        plt.subplot(221),plt.imshow(cv.cvtColor(img,cv.COLOR_BGR2RGB))
         plt.title('Original Image'), plt.xticks([]), plt.yticks([])
-        plt.subplot(132),plt.imshow(cv.cvtColor(worldSpace,cv.COLOR_BGR2RGB))
+        plt.subplot(222),plt.imshow(cv.cvtColor(worldSpace,cv.COLOR_BGR2RGB))
         plt.title('Transformed Image'), plt.xticks([]), plt.yticks([])
-        plt.subplot(133),plt.imshow(ballLoc, cmap = "gray")
-        plt.title('Ball Location Image'), plt.xticks([]), plt.yticks([])
+        plt.subplot(223),plt.imshow(ballLoc, cmap = "gray")
+        plt.title('Ball Location Heatmap'), plt.xticks([]), plt.yticks([])
         plt.show()
     else:
         plt.imshow(cv.cvtColor(output,cv.COLOR_BGR2RGB))
