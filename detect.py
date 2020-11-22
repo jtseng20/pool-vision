@@ -10,7 +10,7 @@ PYRAMID_SCALE = 0.6
 BALL_SIZE = int(2.25 * 2 * TEMPLATE_SCALE)
 table_template_points = (TEMPLATE_SCALE*np.array([[0,0],[88,0],[88,44],[0,44]])).reshape(-1,1,2)
 cueBallTemplate = cv.resize(cv.imread('testFrames/templateBallBlank.png'), (BALL_SIZE, BALL_SIZE), interpolation = cv.INTER_AREA)
-
+BOUNCE_COUNT = 3
 
 # Marked for removal
 def createPyramid(img, min_size = 10):
@@ -270,45 +270,69 @@ def calculateBounce(bx,by,dx,dy):
     
     return (int(ix1),int(iy1), dx, -dy) if dist1 < dist2 else (int(ix2), int(iy2), -dx, dy)
 
-################### TESTING CODE ###############################
-
-for i in range(4,14):
-    img = cv.imread('testFrames/table'+str(i)+'.jpg')
-    output = findCornersAndTransform(img, table_template_points)
-
-    if len(output) == 2:
-        corners, M = output
-        worldSpace = cv.warpPerspective(img,M, (int(88*TEMPLATE_SCALE),int(44*TEMPLATE_SCALE)))
-        img = cv.polylines(img,[np.int32(corners)],True,(0,255,255),10, cv.LINE_AA)
-        
-        ballLoc, (ballX, ballY), ballVal = locateBall(worldSpace, cueBallTemplate)
-        ballX, ballY = ballX + BALL_SIZE // 2, ballY + BALL_SIZE // 2
-        if ballVal > 0.5:
-            cueImage = worldSpace.copy()
-            cueLine = findCue(cueImage, ballX, ballY)
-            cv.circle(worldSpace, (ballX, ballY), BALL_SIZE, (0,0,255), 5)
-            
-            if cueLine is not None:
-                x1,y1,x2,y2 = cueLine
-                cv.line(cueImage, (x1,y1), (x2,y2), (0,0,255), 10)
-                dx, dy = x2-x1,y2-y1
+# inputStream names the camera feed
+def runProcess(inputStream):
+    stage = 0
+    calibrationOutput = []
+    transform = None
+    corners = None
+    
+    calibrationFrame = np.zeros((int(44 * TEMPLATE_SCALE), int(88 * TEMPLATE_SCALE), 3))
+    for point in table_template_points:
+        x,y = point[0]
+        cv.circle(calibrationFrame, (int(x),int(y)), 20, (255,0,0), 20)
                 
-                for bounce in range(3):
-                    ix, iy, dx, dy = calculateBounce(ballX, ballY, dx, dy)
-                    cv.line(cueImage, (ballX,ballY), (ix,iy), (0,255,0), 2)
-                    ballX, ballY = ix, iy
+    '''
+    capture = cv.VideoCapture(inputStream)
+    if not capture.isOpened:
+        print('Unable to open input stream')
+        return
+    '''
+    while True:
+        #img = cv.imread('testFrames/table9.jpg')
+        #ret, img = capture.read()
+        if img is None:
+            break
             
-            plt.subplot(224),plt.imshow(cv.cvtColor(cueImage,cv.COLOR_BGR2RGB))
-            plt.title('Trajectory'), plt.xticks([]), plt.yticks([])
+        if stage == 0: # Finding the table transform
+            if len(calibrationOutput) == 2:
+                corners, transform = calibrationOutput
+                img = cv.polylines(img,[np.int32(corners)],True,(0,255,255),10, cv.LINE_AA)
+            else:
+                calibrationOutput = findCornersAndTransform(img, table_template_points)
+            cv.imshow("",img)
+        elif stage == 1: # Calibrating the projector (serves only a semi-decorative purpose)
+            cv.imshow("",calibrationFrame)
+            # Project this image
+        elif stage == 2: # Main routine
+            worldSpace = cv.warpPerspective(img,transform, (int(88*TEMPLATE_SCALE),int(44*TEMPLATE_SCALE)))
+            ballLoc, (ballX, ballY), ballVal = locateBall(worldSpace, cueBallTemplate)
+            ballX, ballY = ballX + BALL_SIZE // 2, ballY + BALL_SIZE // 2
+            if ballVal > 0.5:
+                cueLine = findCue(worldSpace, ballX, ballY)
+                cv.circle(worldSpace, (ballX, ballY), BALL_SIZE, (0,0,255), 5)
 
-        plt.subplot(221),plt.imshow(cv.cvtColor(img,cv.COLOR_BGR2RGB))
-        plt.title('Original Image'), plt.xticks([]), plt.yticks([])
-        plt.subplot(222),plt.imshow(cv.cvtColor(worldSpace,cv.COLOR_BGR2RGB))
-        plt.title('Transformed Image'), plt.xticks([]), plt.yticks([])
-        plt.subplot(223),plt.imshow(ballLoc, cmap = "gray")
-        plt.title('Ball Location Heatmap'), plt.xticks([]), plt.yticks([])
-        plt.show()
-    else:
-        plt.imshow(cv.cvtColor(output,cv.COLOR_BGR2RGB))
-        plt.title('Bugged Output'), plt.xticks([]), plt.yticks([])
-        plt.show()
+                if cueLine is not None:
+                    x1,y1,x2,y2 = cueLine
+                    cv.line(worldSpace, (x1,y1), (x2,y2), (0,0,255), 10)
+                    dx, dy = x2-x1,y2-y1
+
+                    for bounce in range(BOUNCE_COUNT):
+                        ix, iy, dx, dy = calculateBounce(ballX, ballY, dx, dy)
+                        cv.line(worldSpace, (ballX,ballY), (ix,iy), (0,255,0), 2)
+                        ballX, ballY = ix, iy
+            cv.imshow("",worldSpace)
+        else:
+            break
+            
+        key = cv.waitKey(30)
+        if key == 13: # press ENTER to advance stage
+            stage += 1
+    
+    
+########################  MAIN  ########################
+
+if __name__ == "__main__":
+    # Identify the name of the camera and insert it as the inputStream
+    INPUT_STREAM = 0
+    runProcess(INPUT_STREAM)
