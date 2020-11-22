@@ -2,15 +2,21 @@ import numpy as np
 import cv2 as cv
 from matplotlib import pyplot as plt
 
+SHORTSIDE = 44
+LONGSIDE = 88
+WALLWIDTH = 2
+
 DEBUG = False
+FORCEROTATE = True
 DIST_THRESHOLD = 10
 TEMPLATE_SCALE = 7.5
-AREA_THRESHOLD = 0.2
+AREA_THRESHOLD = 0.1
 PYRAMID_SCALE = 0.6
 BALL_SIZE = int(2.25 * 2 * TEMPLATE_SCALE)
-table_template_points = (TEMPLATE_SCALE*np.array([[0,0],[88,0],[88,44],[0,44]])).reshape(-1,1,2)
+table_template_points = (TEMPLATE_SCALE*np.array([[0,0],[LONGSIDE,0],[LONGSIDE,SHORTSIDE],[0,SHORTSIDE]])).reshape(-1,1,2)
 cueBallTemplate = cv.resize(cv.imread('testFrames/templateBallBlank.png'), (BALL_SIZE, BALL_SIZE), interpolation = cv.INTER_AREA)
 BOUNCE_COUNT = 3
+
 
 # Marked for removal
 def createPyramid(img, min_size = 10):
@@ -122,6 +128,8 @@ def getAbsSlope(L):
     return abs((y2-y1)/(x2-x1+1e-8))
     
 def filterLines(lines):
+    if lines is None:
+        return None
     uniqueLines = []
     for line in lines:
         if allFalse(line[0], uniqueLines):
@@ -162,7 +170,7 @@ def getCorners(lines):
     sc = np.vstack((s, l[np.argsort(np.arctan2(shifted[:,1], shifted[:,0]))]))
     
     # and then ... maybe rotate once to make sure first edge is longest
-    if np.linalg.norm(sc[1] - sc[0]) < np.linalg.norm(sc[2] - sc[1]):
+    if np.linalg.norm(sc[1] - sc[0]) < np.linalg.norm(sc[2] - sc[1]) or FORCEROTATE:
         sc = np.roll(sc, -1, axis=0)
     return sc
 
@@ -200,6 +208,9 @@ def findCornersAndTransform(img, template):
     lines = cv.HoughLinesP(outputRect,1,np.pi/180,100,minLineLength=100,maxLineGap=10)
     filteredLines = filterLines(lines)
     
+    if filteredLines is None:
+        return []
+    
     if len(filteredLines) != 4 or DEBUG:
         print("Filtered {} lines down to {}".format(len(lines), len(filteredLines)))
         out = np.zeros(img.shape, dtype=np.uint8)
@@ -223,6 +234,8 @@ def getLength(L):
 def findCue(img, bx, by):
     edge = cv.Canny(img, 100, 200)
     lines = cv.HoughLinesP(edge,1,np.pi/180,100,minLineLength=100,maxLineGap=10)
+    if lines is None:
+        return None
     validLines = []
     for line in lines:
         x1,y1,x2,y2 = line[0]
@@ -244,17 +257,17 @@ def findCue(img, bx, by):
     return validLines[0]
     
 def calculateBounce(bx,by,dx,dy):
-    slope = dy/dx
+    slope = dy/(dx+1e-8)
     sidesToBounce = []
     if dy < 0:
         sidesToBounce.append(0)
     else:
-        sidesToBounce.append(44 * TEMPLATE_SCALE)
+        sidesToBounce.append(SHORTSIDE * TEMPLATE_SCALE)
         
     if dx < 0:
         sidesToBounce.append(0)
     else:
-        sidesToBounce.append(88 * TEMPLATE_SCALE)
+        sidesToBounce.append(LONGSIDE * TEMPLATE_SCALE)
         
     # calculate the intersection with the top/bottom edge
     yDist = sidesToBounce[0] - by
@@ -277,20 +290,20 @@ def runProcess(inputStream):
     transform = None
     corners = None
     
-    calibrationFrame = np.zeros((int(44 * TEMPLATE_SCALE), int(88 * TEMPLATE_SCALE), 3))
+    calibrationFrame = np.zeros((int(SHORTSIDE * TEMPLATE_SCALE), int(LONGSIDE * TEMPLATE_SCALE), 3))
     for point in table_template_points:
         x,y = point[0]
         cv.circle(calibrationFrame, (int(x),int(y)), 20, (255,0,0), 20)
                 
-    '''
+    
     capture = cv.VideoCapture(inputStream)
     if not capture.isOpened:
         print('Unable to open input stream')
         return
-    '''
+    
     while True:
         #img = cv.imread('testFrames/table9.jpg')
-        #ret, img = capture.read()
+        ret, img = capture.read()
         if img is None:
             break
             
@@ -334,5 +347,5 @@ def runProcess(inputStream):
 
 if __name__ == "__main__":
     # Identify the name of the camera and insert it as the inputStream
-    INPUT_STREAM = 0
+    INPUT_STREAM = "testFrames/testPool.mp4"
     runProcess(INPUT_STREAM)
