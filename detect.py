@@ -315,7 +315,7 @@ def runProcess(inputStream):
         elif stage == 1: # Calibrating the projector (serves only a semi-decorative purpose)
             cv.imshow("",calibrationFrame)
             # Project this image
-        elif stage == 2: # Main routine
+        elif stage >= 2: # Main routine
             worldSpace = cv.warpPerspective(img,transform, (int(88*TEMPLATE_SCALE),int(44*TEMPLATE_SCALE)))
             ballLoc, (ballX, ballY), ballVal = locateBall(worldSpace, cueBallTemplate)
             if ballVal > CORRELATION_FLOOR:
