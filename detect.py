@@ -7,7 +7,7 @@ LONGSIDE = 88
 WALLWIDTH = 2
 
 DEBUG = False
-FORCEROTATE = True
+FORCEROTATE = False
 DIST_THRESHOLD = 10
 TEMPLATE_SCALE = 7.5
 AREA_THRESHOLD = 0.1
@@ -16,6 +16,22 @@ BALL_SIZE = int(2.25 * 2 * TEMPLATE_SCALE)
 table_template_points = (TEMPLATE_SCALE*np.array([[0,0],[LONGSIDE,0],[LONGSIDE,SHORTSIDE],[0,SHORTSIDE]])).reshape(-1,1,2)
 cueBallTemplate = cv.resize(cv.imread('testFrames/templateBallBlank.png'), (BALL_SIZE, BALL_SIZE), interpolation = cv.INTER_AREA)
 BOUNCE_COUNT = 3
+DOCONFIG = False
+
+low_green = np.array([25, 52, 72])
+high_green = np.array([102, 255, 255])
+
+def nothing(x):
+    pass
+
+if DOCONFIG:
+    cv.namedWindow('config')
+    cv.createTrackbar('H_low','config',0,255,nothing)
+    cv.createTrackbar('S_low','config',0,255,nothing)
+    cv.createTrackbar('V_low','config',0,255,nothing)
+    cv.createTrackbar('H_high','config',0,255,nothing)
+    cv.createTrackbar('S_high','config',0,255,nothing)
+    cv.createTrackbar('V_high','config',0,255,nothing)
 
 
 # Marked for removal
@@ -180,10 +196,16 @@ def drawCorners(img, corners, color = (0,255,0), radius = 5):
         cv.circle(img, (corner[0],corner[1]), radius, color, 5)
         
 def getTableMask(img):
+    # Configure the bounds
+    if DOCONFIG:
+        low_green[0] = cv.getTrackbarPos('H_low','config')
+        low_green[1] = cv.getTrackbarPos('S_low','config')
+        low_green[2] = cv.getTrackbarPos('V_low','config')
+        high_green[0] = cv.getTrackbarPos('H_high','config')
+        high_green[1] = cv.getTrackbarPos('S_high','config')
+        high_green[2] = cv.getTrackbarPos('V_high','config')
     # Masks out the green stuff in the scene. Maybe upgrade to use feature matching?
     hsv = cv.cvtColor(img, cv.COLOR_BGR2HSV)
-    low_green = np.array([25, 52, 72])
-    high_green = np.array([102, 255, 255])
     mask = cv.inRange(hsv, low_green, high_green)
     kernel = np.ones((5, 5), np.uint8)
     mask = cv.erode(mask, kernel, iterations=1)
@@ -195,37 +217,40 @@ def findCornersAndTransform(img, template):
     totalArea = img.shape[0]*img.shape[1]
     
     mask = getTableMask(img)
-    contours, _ = cv.findContours(mask, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
-
-    for cnt in contours:
-        area = cv.contourArea(cnt)
-        approx = cv.convexHull(cnt)
-
-        if area > totalArea*AREA_THRESHOLD:
-            cv.drawContours(outputRect, [approx], 0, 255, 2)
-            #cv.fillPoly(outputRect, [approx], 255)
-            
-    lines = cv.HoughLinesP(outputRect,1,np.pi/180,100,minLineLength=100,maxLineGap=10)
-    filteredLines = filterLines(lines)
-    
-    if filteredLines is None:
+    if DOCONFIG:
+        cv.imshow("maskDebug", mask)
         return []
-    
-    if len(filteredLines) != 4 or DEBUG:
-        print("Filtered {} lines down to {}".format(len(lines), len(filteredLines)))
-        out = np.zeros(img.shape, dtype=np.uint8)
-        print(filteredLines)
-        for line in filteredLines:
-            x1,y1,x2,y2 = line
-            cv.line(out,(x1,y1),(x2,y2),(0,255,0),1)
-            
-        print("Found {} edges".format(len(filteredLines)))
-        return out
-    
-    corners = np.float32(getCorners(filteredLines)).reshape(-1,1,2)
-    M, _ = cv.findHomography(corners, template, 0)
-    
-    return corners, M
+    else:
+        contours, _ = cv.findContours(mask, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+
+        for cnt in contours:
+            area = cv.contourArea(cnt)
+            approx = cv.convexHull(cnt)
+
+            if area > totalArea*AREA_THRESHOLD:
+                cv.drawContours(outputRect, [approx], 0, 255, 2)
+                #cv.fillPoly(outputRect, [approx], 255)
+
+        lines = cv.HoughLinesP(outputRect,1,np.pi/180,100,minLineLength=100,maxLineGap=10)
+        filteredLines = filterLines(lines)
+
+        if filteredLines is None:
+            return []
+
+        if len(filteredLines) != 4 or DEBUG:
+            #print("Filtered {} lines down to {}".format(len(lines), len(filteredLines)))
+            out = np.zeros(img.shape, dtype=np.uint8)
+            for line in filteredLines:
+                x1,y1,x2,y2 = line
+                cv.line(out,(x1,y1),(x2,y2),(0,255,0),1)
+
+            #print("Found {} edges".format(len(filteredLines)))
+            return out
+
+        corners = np.float32(getCorners(filteredLines)).reshape(-1,1,2)
+        M, _ = cv.findHomography(corners, template, 0)
+
+        return corners, M
 
 def getLength(L):
     a,b,c,d = L
@@ -271,13 +296,13 @@ def calculateBounce(bx,by,dx,dy):
         
     # calculate the intersection with the top/bottom edge
     yDist = sidesToBounce[0] - by
-    xDist = yDist * dx / dy
+    xDist = yDist * dx / (dy + 1e-8)
     ix1, iy1 = bx + xDist, sidesToBounce[0]
     dist1 = (yDist**2 + xDist**2)**0.5
     
     # calculate the intersection with the left/right edge
     xDist = sidesToBounce[1] - bx
-    yDist = xDist * dy / dx
+    yDist = xDist * dy / (dx + 1e-8)
     ix2, iy2 = sidesToBounce[1], by + yDist
     dist2 = (yDist**2 + xDist**2)**0.5
     
@@ -347,5 +372,5 @@ def runProcess(inputStream):
 
 if __name__ == "__main__":
     # Identify the name of the camera and insert it as the inputStream
-    INPUT_STREAM = "testFrames/testPool.mp4"
+    INPUT_STREAM = "testFrames/output1.mp4"
     runProcess(INPUT_STREAM)
