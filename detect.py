@@ -18,6 +18,7 @@ cueBallTemplate = cv.resize(cv.imread('testFrames/templateBallBlank.png'), (BALL
 BOUNCE_COUNT = 3
 DOCONFIG = False
 CORRELATION_FLOOR = 0.8
+WINDOW = 10
 
 low_green = np.array([25, 52, 72])
 high_green = np.array([102, 255, 255])
@@ -34,35 +35,6 @@ if DOCONFIG:
     cv.createTrackbar('S_high','config',0,255,nothing)
     cv.createTrackbar('V_high','config',0,255,nothing)
 
-
-# Marked for removal
-def createPyramid(img, min_size = 10):
-    out = []
-    currentScale = 1.0
-    while True:
-        currentScale *= PYRAMID_SCALE
-        if img.shape[0] * currentScale <= min_size or img.shape[1] * currentScale <= min_size:
-            break
-            
-        width = int(img.shape[1] * currentScale)
-        height = int(img.shape[0] * currentScale)
-        dim = (width, height)
-        rescaled_img = cv.resize(img,dim,interpolation = cv.INTER_AREA)
-        out.append(rescaled_img)
-        
-    return out
-
-# Marked for removal
-def returnPyramidMatch(img, template):
-    pyramid = createPyramid(template)
-    res = np.zeros((img.shape[0],img.shape[1]),dtype=np.float32)
-    for t in pyramid:
-        match = cv.matchTemplate(img,t,3)
-        res[:match.shape[0], :match.shape[1]] += match
-        
-    min_val, max_val, min_loc, max_loc = cv.minMaxLoc(res)
-    return max_loc
-
 def locateBall(img, template):
     res = cv.matchTemplate(img,template,5)
     # Convolve with box filter to encourage finding the point with 
@@ -72,7 +44,6 @@ def locateBall(img, template):
     res = cv.filter2D(res, -1, smoothingKernel)
     min_val, max_val, min_loc, max_loc = cv.minMaxLoc(res)
     return res, max_loc, max_val
-
 
 def dist(x1,y1,x2,y2):
     return ((x2-x1)**2 + (y2-y1)**2)**0.5
@@ -230,7 +201,6 @@ def findCornersAndTransform(img, template):
 
             if area > totalArea*AREA_THRESHOLD:
                 cv.drawContours(outputRect, [approx], 0, 255, 2)
-                #cv.fillPoly(outputRect, [approx], 255)
 
         lines = cv.HoughLinesP(outputRect,1,np.pi/180,100,minLineLength=100,maxLineGap=10)
         filteredLines = filterLines(lines)
@@ -327,8 +297,10 @@ def runProcess(inputStream):
         print('Unable to open input stream')
         return
     
+    lastSureX, lastSureY = None, None
+    lastDX, lastDY = None, None
+    counter = 0
     while True:
-        #img = cv.imread('testFrames/table9.jpg')
         ret, img = capture.read()
         if img is None:
             break
@@ -346,8 +318,12 @@ def runProcess(inputStream):
         elif stage == 2: # Main routine
             worldSpace = cv.warpPerspective(img,transform, (int(88*TEMPLATE_SCALE),int(44*TEMPLATE_SCALE)))
             ballLoc, (ballX, ballY), ballVal = locateBall(worldSpace, cueBallTemplate)
-            ballX, ballY = ballX + BALL_SIZE // 2, ballY + BALL_SIZE // 2
             if ballVal > CORRELATION_FLOOR:
+                counter = 0
+                ballX, ballY = ballX + BALL_SIZE // 2, ballY + BALL_SIZE // 2
+                if lastSureX is not None:
+                    lastDX, lastDY = ballX - lastSureX, ballY - lastSureY
+                lastSureX, lastSureY = ballX, ballY
                 cueLine = findCue(worldSpace, ballX, ballY)
                 cv.circle(worldSpace, (ballX, ballY), BALL_SIZE, (0,0,255), 5)
 
@@ -360,11 +336,19 @@ def runProcess(inputStream):
                         ix, iy, dx, dy = calculateBounce(ballX, ballY, dx, dy)
                         cv.line(worldSpace, (ballX,ballY), (ix,iy), (0,255,0), 2)
                         ballX, ballY = ix, iy
+            elif lastSureX is not None and counter < 30:
+                #_, max_val, _, (unsureX, unsureY) = cv.minMaxLoc(ballLoc[lastSureX-WINDOW:lastSureX+WINDOW, lastSureY-WINDOW:lastSureY+WINDOW])
+                #unsureX, unsureY = unsureX + lastSureX + BALL_SIZE // 2, unsureY + lastSureY + BALL_SIZE // 2
+                cv.circle(worldSpace, (lastSureX, lastSureY), BALL_SIZE, (255,255,0), 5)
+                lastSureX, lastSureY = lastSureX + lastDX, lastSureY + lastDY
+                if lastDX != 0 or lastDY != 0:
+                    counter += 1
+                
             cv.imshow("",worldSpace)
         else:
             break
             
-        key = cv.waitKey(1)
+        key = cv.waitKey(3)
         if key == 13: # press ENTER to advance stage
             stage += 1
     
