@@ -2,9 +2,9 @@ import numpy as np
 import cv2 as cv
 from matplotlib import pyplot as plt
 
-SHORTSIDE = 44
-LONGSIDE = 88
 WALLWIDTH = 2
+SHORTSIDE = 44 + 2*WALLWIDTH
+LONGSIDE = 88 + 2*WALLWIDTH
 
 DEBUG = False
 FORCEROTATE = False
@@ -17,6 +17,7 @@ table_template_points = (TEMPLATE_SCALE*np.array([[0,0],[LONGSIDE,0],[LONGSIDE,S
 cueBallTemplate = cv.resize(cv.imread('testFrames/templateBallBlank.png'), (BALL_SIZE, BALL_SIZE), interpolation = cv.INTER_AREA)
 BOUNCE_COUNT = 3
 DOCONFIG = False
+CORRELATION_FLOOR = 0.8
 
 low_green = np.array([25, 52, 72])
 high_green = np.array([102, 255, 255])
@@ -285,14 +286,14 @@ def calculateBounce(bx,by,dx,dy):
     slope = dy/(dx+1e-8)
     sidesToBounce = []
     if dy < 0:
-        sidesToBounce.append(0)
+        sidesToBounce.append(WALLWIDTH * TEMPLATE_SCALE)
     else:
-        sidesToBounce.append(SHORTSIDE * TEMPLATE_SCALE)
+        sidesToBounce.append((SHORTSIDE - WALLWIDTH) * TEMPLATE_SCALE)
         
     if dx < 0:
-        sidesToBounce.append(0)
+        sidesToBounce.append(WALLWIDTH * TEMPLATE_SCALE)
     else:
-        sidesToBounce.append(LONGSIDE * TEMPLATE_SCALE)
+        sidesToBounce.append((LONGSIDE - WALLWIDTH) * TEMPLATE_SCALE)
         
     # calculate the intersection with the top/bottom edge
     yDist = sidesToBounce[0] - by
@@ -346,7 +347,7 @@ def runProcess(inputStream):
             worldSpace = cv.warpPerspective(img,transform, (int(88*TEMPLATE_SCALE),int(44*TEMPLATE_SCALE)))
             ballLoc, (ballX, ballY), ballVal = locateBall(worldSpace, cueBallTemplate)
             ballX, ballY = ballX + BALL_SIZE // 2, ballY + BALL_SIZE // 2
-            if ballVal > 0.5:
+            if ballVal > CORRELATION_FLOOR:
                 cueLine = findCue(worldSpace, ballX, ballY)
                 cv.circle(worldSpace, (ballX, ballY), BALL_SIZE, (0,0,255), 5)
 
@@ -363,7 +364,7 @@ def runProcess(inputStream):
         else:
             break
             
-        key = cv.waitKey(30)
+        key = cv.waitKey(1)
         if key == 13: # press ENTER to advance stage
             stage += 1
     
