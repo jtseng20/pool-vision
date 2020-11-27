@@ -130,7 +130,7 @@ def filterLines(lines):
                 uniqueLines[i] = combineLines(uniqueLines[i], l[0])
     
     # Sort by absolute slope to make sure parallel pairs are together
-    uniqueLines.sort(key = getAbsSlope)
+    uniqueLines.sort(key = getLength)
     return uniqueLines
         
 
@@ -216,7 +216,7 @@ def findCornersAndTransform(img, template):
                 cv.line(out,(x1,y1),(x2,y2),(0,255,0),1)
 
             #print("Found {} edges".format(len(filteredLines)))
-            return out
+            cv.imshow("debugTrash",out)
 
         corners = np.float32(getCorners(filteredLines)).reshape(-1,1,2)
         M, _ = cv.findHomography(corners, template, 0)
@@ -292,16 +292,17 @@ def runProcess(inputStream):
         cv.circle(calibrationFrame, (int(x),int(y)), 20, (255,0,0), 20)
                 
     
-    capture = cv.VideoCapture(inputStream)
+    '''capture = cv.VideoCapture(inputStream)
     if not capture.isOpened:
         print('Unable to open input stream')
-        return
+        return'''
     
     lastSureX, lastSureY = None, None
     lastDX, lastDY = None, None
     counter = 0
     while True:
-        ret, img = capture.read()
+        #ret, img = capture.read()
+        img = cv.imread("testFrames/testImage.png")
         if img is None:
             break
             
