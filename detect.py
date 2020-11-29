@@ -2,26 +2,30 @@ import numpy as np
 import cv2 as cv
 from matplotlib import pyplot as plt
 
+TEMPLATE_SCALE = 7.5
 WALLWIDTH = 2
 SHORTSIDE = 44 + 2*WALLWIDTH
 LONGSIDE = 88 + 2*WALLWIDTH
-
-DEBUG = False
-FORCEROTATE = False
-DIST_THRESHOLD = 10
-TEMPLATE_SCALE = 7.5
-AREA_THRESHOLD = 0.1
-PYRAMID_SCALE = 0.6
+STANDARDAREA = LONGSIDE * SHORTSIDE * TEMPLATE_SCALE**2
 BALL_SIZE = int(2.25 * 2 * TEMPLATE_SCALE)
-table_template_points = (TEMPLATE_SCALE*np.array([[0,0],[LONGSIDE,0],[LONGSIDE,SHORTSIDE],[0,SHORTSIDE]])).reshape(-1,1,2)
-cueBallTemplate = cv.resize(cv.imread('testFrames/templateBallBlank.png'), (BALL_SIZE, BALL_SIZE), interpolation = cv.INTER_AREA)
-BOUNCE_COUNT = 3
-DOCONFIG = False
-CORRELATION_FLOOR = 0.8
-WINDOW = 10
 
+table_template_points = (TEMPLATE_SCALE*np.array([[0,0],[LONGSIDE,0],[LONGSIDE,SHORTSIDE],[0,SHORTSIDE]])).reshape(-1,1,2)
+cueBallTemplate = cv.resize(cv.imread('templateBallBlank.png'), (BALL_SIZE, BALL_SIZE), interpolation = cv.INTER_AREA)
+tightTemplate = cv.resize(cv.imread('tightTemplate.png'), (BALL_SIZE//2, BALL_SIZE//2), interpolation = cv.INTER_AREA)
+
+DIST_THRESHOLD = 10
+AREA_THRESHOLD = 0.1
+BOUNCE_COUNT = 3
+CORRELATION_FLOOR = 0.8
+WINDOW = BALL_SIZE
 low_green = np.array([25, 52, 72])
 high_green = np.array([102, 255, 255])
+
+# Debug Flags
+DEBUG = False
+FORCEROTATE = False
+DOCONFIG = False
+
 
 def nothing(x):
     pass
@@ -36,6 +40,8 @@ if DOCONFIG:
     cv.createTrackbar('V_high','config',0,255,nothing)
 
 def locateBall(img, template):
+    if img.shape[0] < template.shape[0] or img.shape[1] < template.shape[1]:
+        return None, (0,0), None
     res = cv.matchTemplate(img,template,5)
     # Convolve with box filter to encourage finding the point with 
     # sustained average high matching probability, instead of just a single high value.
@@ -47,6 +53,10 @@ def locateBall(img, template):
 
 def dist(x1,y1,x2,y2):
     return ((x2-x1)**2 + (y2-y1)**2)**0.5
+
+def getLength(L):
+    a,b,c,d = L
+    return dist(a,b,c,d)
     
 def isClose(slope1, slope2):
     if abs(slope1) > 10: # for steep slopes 
@@ -129,7 +139,7 @@ def filterLines(lines):
                 #combine these two
                 uniqueLines[i] = combineLines(uniqueLines[i], l[0])
     
-    # Sort by absolute slope to make sure parallel pairs are together
+    # Sort by length to make sure parallel pairs are together
     uniqueLines.sort(key = getLength)
     return uniqueLines
         
@@ -161,11 +171,6 @@ def getCorners(lines):
     if np.linalg.norm(sc[1] - sc[0]) < np.linalg.norm(sc[2] - sc[1]) or FORCEROTATE:
         sc = np.roll(sc, -1, axis=0)
     return sc
-
-# Marked for removal
-def drawCorners(img, corners, color = (0,255,0), radius = 5):
-    for corner in corners:
-        cv.circle(img, (corner[0],corner[1]), radius, color, 5)
         
 def getTableMask(img):
     # Configure the bounds
@@ -223,10 +228,19 @@ def findCornersAndTransform(img, template):
 
         return corners, M
 
-def getLength(L):
-    a,b,c,d = L
-    return dist(a,b,c,d)
+# From Green's Theorem
+def getAreaFromCorners(corners):
+    corners.append(corners[0])
+    out = 0
+    for i in range(len(corners) - 1):
+        out += corners[i][0][0]*corners[i+1][0][1] - corners[i+1][0][0]*corners[i][0][1]
+    return abs(out / 2)
 
+def warpPoint(x, y, t):
+    point = np.float32([[x,y]]).reshape(-1,1,2)
+    dst = cv.perspectiveTransform(point,t).astype(int)
+    return dst[0][0]
+    
 def findCue(img, bx, by):
     edge = cv.Canny(img, 100, 200)
     lines = cv.HoughLinesP(edge,1,np.pi/180,100,minLineLength=100,maxLineGap=10)
@@ -292,64 +306,71 @@ def runProcess(inputStream):
         cv.circle(calibrationFrame, (int(x),int(y)), 20, (255,0,0), 20)
                 
     
-    '''capture = cv.VideoCapture(inputStream)
+    capture = cv.VideoCapture(inputStream)
     if not capture.isOpened:
         print('Unable to open input stream')
-        return'''
+        return
     
     lastSureX, lastSureY = None, None
-    lastDX, lastDY = None, None
-    counter = 0
+    areaScale = 0
+    masked = None
+    mask = None
     while True:
-        #ret, img = capture.read()
-        img = cv.imread("testFrames/testImage.png")
+        ret, img = capture.read()
+        #img = cv.imread("testFrames/testImage.png")
         if img is None:
             break
-            
+        
+        masked = cv.bitwise_and(img, mask) if mask is not None else img
         if stage == 0: # Finding the table transform
             if len(calibrationOutput) == 2:
                 corners, transform = calibrationOutput
-                img = cv.polylines(img,[np.int32(corners)],True,(0,255,255),10, cv.LINE_AA)
+                mask = np.zeros(img.shape, dtype=np.uint8)
+                mask = cv.fillPoly(mask,[np.int32(corners)],(255,255,255))
+                masked = cv.bitwise_and(img, mask)
+                #areaScale = (getAreaFromCorners(list(corners)) / STANDARDAREA)
+                #BALL_SIZE = int(BALL_SIZE * areaScale)
+                #cueBallTemplate = cv.resize(cv.imread('testFrames/templateBallBlank.png'), (BALL_SIZE, BALL_SIZE), interpolation = cv.INTER_AREA)
             else:
                 calibrationOutput = findCornersAndTransform(img, table_template_points)
-            cv.imshow("",img)
+            cv.imshow("",masked)
         elif stage == 1: # Calibrating the projector (serves only a semi-decorative purpose)
             cv.imshow("",calibrationFrame)
             # Project this image
         elif stage == 2: # Main routine
-            worldSpace = cv.warpPerspective(img,transform, (int(88*TEMPLATE_SCALE),int(44*TEMPLATE_SCALE)))
+            worldSpace = cv.warpPerspective(img,transform, (int(LONGSIDE*TEMPLATE_SCALE),int(SHORTSIDE*TEMPLATE_SCALE)))
             ballLoc, (ballX, ballY), ballVal = locateBall(worldSpace, cueBallTemplate)
+            
+            locatedX, locatedY = None, None
+            
             if ballVal > CORRELATION_FLOOR:
-                counter = 0
+                #ballX, ballY = warpPoint(ballX, ballY, transform)
                 ballX, ballY = ballX + BALL_SIZE // 2, ballY + BALL_SIZE // 2
-                if lastSureX is not None:
-                    lastDX, lastDY = ballX - lastSureX, ballY - lastSureY
                 lastSureX, lastSureY = ballX, ballY
-                cueLine = findCue(worldSpace, ballX, ballY)
-                cv.circle(worldSpace, (ballX, ballY), BALL_SIZE, (0,0,255), 5)
-
+                locatedX, locatedY = ballX, ballY
+                
+            elif lastSureX is not None:
+                unsureMap, (unsureX, unsureY), max_val = locateBall(worldSpace[lastSureY-WINDOW:lastSureY+WINDOW, lastSureX-WINDOW:lastSureX+WINDOW,:], tightTemplate)
+                locatedX, locatedY = unsureX - WINDOW + lastSureX + BALL_SIZE // 4, unsureY - WINDOW + lastSureY + BALL_SIZE // 4
+                        
+            if locatedX is not None:
+                cueLine = findCue(worldSpace, locatedX, locatedY)
+                cv.circle(worldSpace, (locatedX, locatedY), BALL_SIZE, (255,255,0), 5)
                 if cueLine is not None:
                     x1,y1,x2,y2 = cueLine
                     cv.line(worldSpace, (x1,y1), (x2,y2), (0,0,255), 10)
                     dx, dy = x2-x1,y2-y1
 
                     for bounce in range(BOUNCE_COUNT):
-                        ix, iy, dx, dy = calculateBounce(ballX, ballY, dx, dy)
-                        cv.line(worldSpace, (ballX,ballY), (ix,iy), (0,255,0), 2)
-                        ballX, ballY = ix, iy
-            elif lastSureX is not None and counter < 30:
-                #_, max_val, _, (unsureX, unsureY) = cv.minMaxLoc(ballLoc[lastSureX-WINDOW:lastSureX+WINDOW, lastSureY-WINDOW:lastSureY+WINDOW])
-                #unsureX, unsureY = unsureX + lastSureX + BALL_SIZE // 2, unsureY + lastSureY + BALL_SIZE // 2
-                cv.circle(worldSpace, (lastSureX, lastSureY), BALL_SIZE, (255,255,0), 5)
-                lastSureX, lastSureY = lastSureX + lastDX, lastSureY + lastDY
-                if lastDX != 0 or lastDY != 0:
-                    counter += 1
+                        ix, iy, dx, dy = calculateBounce(locatedX, locatedY, dx, dy)
+                        cv.line(worldSpace, (locatedX, locatedY), (ix,iy), (0,255,0), 2)
+                        locatedX, locatedY = ix, iy
                 
             cv.imshow("",worldSpace)
         else:
             break
             
-        key = cv.waitKey(3)
+        key = cv.waitKey(1)
         if key == 13: # press ENTER to advance stage
             stage += 1
     
