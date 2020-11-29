@@ -299,7 +299,6 @@ def runProcess(inputStream):
     calibrationOutput = []
     transform = None
     corners = None
-    counter = 0
     
     calibrationFrame = np.zeros((int(SHORTSIDE * TEMPLATE_SCALE), int(LONGSIDE * TEMPLATE_SCALE), 3))
     for point in table_template_points:
@@ -368,9 +367,6 @@ def runProcess(inputStream):
                         locatedX, locatedY = ix, iy
                 
             cv.imshow("",worldSpace)
-            if counter >= 472 and counter % 5 == 0:
-                cv.imwrite("frame"+str(counter)+".png",worldSpace)
-            counter+=1
         else:
             break
             
