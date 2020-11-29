@@ -334,11 +334,14 @@ def runProcess(inputStream):
             else:
                 calibrationOutput = findCornersAndTransform(img, table_template_points)
             cv.imshow("",masked)
-        elif stage == 1: # Calibrating the projector (serves only a semi-decorative purpose)
+        elif stage == 1: # Calibrating the projector
+            # (Line up the circles with the corners of the table; more or less just decorative)
             cv.imshow("",calibrationFrame)
             # Project this image
         elif stage == 2: # Main routine
+            # In "real-world" execution, draw the lines on a blank picture instead, to be projected onto the real table
             worldSpace = cv.warpPerspective(img,transform, (int(LONGSIDE*TEMPLATE_SCALE),int(SHORTSIDE*TEMPLATE_SCALE)))
+            #output = np.zeros(worldSpace.shape, dtype = np.uint8)
             ballLoc, (ballX, ballY), ballVal = locateBall(worldSpace, cueBallTemplate)
             
             locatedX, locatedY = None, None
@@ -356,17 +359,21 @@ def runProcess(inputStream):
             if locatedX is not None:
                 cueLine = findCue(worldSpace, locatedX, locatedY)
                 cv.circle(worldSpace, (locatedX, locatedY), BALL_SIZE, (255,255,0), 5)
+                #cv.circle(output, (locatedX, locatedY), BALL_SIZE, (255,255,0), 5)
                 if cueLine is not None:
                     x1,y1,x2,y2 = cueLine
                     cv.line(worldSpace, (x1,y1), (x2,y2), (0,0,255), 10)
+                    #cv.line(output, (x1,y1), (x2,y2), (0,0,255), 10)
                     dx, dy = x2-x1,y2-y1
 
                     for bounce in range(BOUNCE_COUNT):
                         ix, iy, dx, dy = calculateBounce(locatedX, locatedY, dx, dy)
                         cv.line(worldSpace, (locatedX, locatedY), (ix,iy), (0,255,0), 2)
+                        #cv.line(output, (locatedX, locatedY), (ix,iy), (0,255,0), 2)
                         locatedX, locatedY = ix, iy
                 
             cv.imshow("",worldSpace)
+            #cv.imshow("",output)
         else:
             break
             
